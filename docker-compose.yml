@@ -1,0 +1,23 @@
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+
+  backend:
+    build: ./backend
+    ports:
+      - "8080:8080"
+    env_file: ./backend/.env
+    environment:
+      - CHROMA_HOST=chroma   # override so backend reaches the chroma container
+      - CHROMA_PORT=8000
+    depends_on:
+      - chroma
+
+volumes:
+  chroma_data:
