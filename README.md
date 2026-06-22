@@ -93,4 +93,3 @@ cd backend
 pytest
 ```
 
-15 tests: unit (chunking), API (all endpoints, mocked OpenAI + Chroma).

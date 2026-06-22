@@ -4,10 +4,13 @@ import type { SourceChunk, IngestResponse } from "./api";
 import "./App.css";
 
 interface Message {
+  id: number;
   role: "user" | "assistant";
   content: string;
   sources?: SourceChunk[];
 }
+
+let nextMessageId = 0;
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -24,30 +27,30 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  async function sendChat(e: React.FormEvent) {
+  async function sendChat(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!query.trim() || chatLoading) return;
     const userMsg = query.trim();
     setQuery("");
     setChatError(null);
 
-    const userMsgObj: Message = { role: "user", content: userMsg };
-    const assistantMsgObj: Message = { role: "assistant", content: "", sources: [] };
+    const userMsgObj: Message = { id: nextMessageId++, role: "user", content: userMsg };
+    const assistantMsgObj: Message = { id: nextMessageId++, role: "assistant", content: "", sources: [] };
+    const assistantId = assistantMsgObj.id;
 
     setMessages((m) => [...m, userMsgObj, assistantMsgObj]);
-    const assistantIdx = messages.length + 1;
     setChatLoading(true);
 
     try {
       for await (const event of streamChat(userMsg)) {
         if (event.type === "sources") {
           setMessages((m) =>
-            m.map((msg, i) => (i === assistantIdx ? { ...msg, sources: event.sources } : msg))
+            m.map((msg) => (msg.id === assistantId ? { ...msg, sources: event.sources } : msg))
           );
         } else if (event.type === "token") {
           setMessages((m) =>
-            m.map((msg, i) =>
-              i === assistantIdx ? { ...msg, content: msg.content + (event.content ?? "") } : msg
+            m.map((msg) =>
+              msg.id === assistantId ? { ...msg, content: msg.content + (event.content ?? "") } : msg
             )
           );
           bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -60,7 +63,7 @@ export default function App() {
     }
   }
 
-  async function handleIngestText(e: React.FormEvent) {
+  async function handleIngestText(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!pasteText.trim() || ingestLoading) return;
     setIngestLoading(true);
@@ -145,7 +148,7 @@ export default function App() {
         <h1>RAG Chat</h1>
         <div className="messages">
           {messages.map((msg, i) => (
-            <div key={i} className={`message message--${msg.role}`}>
+            <div key={msg.id} className={`message message--${msg.role}`}>
               <div className="message__content">
                 {msg.content ||
                   (msg.role === "assistant" && chatLoading && i === messages.length - 1
