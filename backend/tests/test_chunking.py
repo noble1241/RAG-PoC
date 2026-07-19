@@ -76,6 +76,22 @@ def test_oversized_section_splits_with_overlap():
     assert sum(c.token_count for c in chunks) > _tok(body)
 
 
+def test_multi_block_section_respects_cap():
+    # budget = chunk_size(200) - prefix_tokens("Sec\n\n") = 198; overlap = 20.
+    # p1 ~150 tokens (< budget). p2 ~186 tokens: < budget on its own, but
+    # > budget - overlap (178), so carrying the overlap tail + p2 would
+    # exceed budget and must be caught by the packing-loop re-check.
+    p1 = " ".join(f"alpha{i}" for i in range(75))
+    p2 = " ".join(f"beta{i}" for i in range(93))
+    assert _tok(p1) < 198
+    assert 178 < _tok(p2) <= 198
+    md = f"# Sec\n\n{p1}\n\n{p2}\n"
+    chunks = chunk_markdown(md, source="m.md", chunk_size=200, chunk_overlap=20)
+    assert len(chunks) >= 2
+    for c in chunks:
+        assert c.token_count <= 205, f"chunk {c.chunk_index} has {c.token_count} tokens"
+
+
 def test_hash_inside_code_fence_is_not_a_heading():
     md = "# Real\n\n```python\n# this is a comment, not a heading\nx = 1\n```\n"
     chunks = chunk_markdown(md, source="code.md", chunk_size=500, chunk_overlap=10)

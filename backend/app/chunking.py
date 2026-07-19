@@ -140,7 +140,11 @@ def _section_bodies(
         utoks = len(enc.encode(u))
         if cur and cur_tokens + utoks > budget:
             bodies.append("\n\n".join(cur).strip())
-            cur, cur_tokens = _overlap_tail(bodies[-1], enc, chunk_overlap)
+            tail, tail_tokens = _overlap_tail(bodies[-1], enc, chunk_overlap)
+            if tail_tokens + utoks <= budget:
+                cur, cur_tokens = tail, tail_tokens
+            else:
+                cur, cur_tokens = [], 0
         cur.append(u)
         cur_tokens += utoks
     if cur:
