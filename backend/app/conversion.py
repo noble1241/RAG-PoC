@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Protocol
 
 from markitdown import MarkItDown
@@ -22,11 +23,19 @@ class DocumentConverter(Protocol):
 
 class LocalMarkItDownConverter:
     """In-process MarkItDown converter. Blocking conversion is offloaded to a
-    worker thread so it never freezes the async event loop."""
+    dedicated bounded thread pool so it never freezes the async event loop and
+    stays isolated from the default executor used elsewhere (e.g. the Chroma
+    client in vectorstore.py) — a run of slow/hung conversions can't starve
+    vector-store I/O. Note: a timed-out conversion cancels the future, but the
+    OS thread keeps draining the blocking call until it finishes (threads are
+    not cancellable); the bounded pool caps how many such threads can pile up."""
 
-    def __init__(self, timeout_seconds: int) -> None:
+    def __init__(self, timeout_seconds: int, max_workers: int = 4) -> None:
         self._md = MarkItDown()
         self._timeout = timeout_seconds
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="markitdown"
+        )
 
     async def to_markdown(self, data: bytes, filename: str) -> str:
         loop = asyncio.get_running_loop()
@@ -37,7 +46,7 @@ class LocalMarkItDownConverter:
             return result.text_content or ""
 
         return await asyncio.wait_for(
-            loop.run_in_executor(None, _convert),
+            loop.run_in_executor(self._executor, _convert),
             timeout=self._timeout,
         )
 
