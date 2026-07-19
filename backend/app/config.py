@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     top_k: int = 4
     chunk_size: int = 500
     chunk_overlap: int = 50
+    conversion_timeout_seconds: int = 30
 
     # Server
     allowed_origins: list[str] = ["http://localhost:5173"]
