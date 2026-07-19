@@ -48,7 +48,7 @@ def _parse_blocks(md_text: str) -> list[_Block]:
     i = 0
     while i < n:
         tok = tokens[i]
-        is_leaf = tok.type in ("fence", "hr", "html_block")
+        is_leaf = tok.type in ("fence", "hr", "html_block", "code_block")
         if tok.level != 0 or not (tok.type.endswith("_open") or is_leaf) or tok.map is None:
             i += 1
             continue

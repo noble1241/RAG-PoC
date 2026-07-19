@@ -48,3 +48,11 @@ def test_different_sources_different_ids():
     a = chunk_markdown(md, source="a.md", chunk_size=200, chunk_overlap=10)
     b = chunk_markdown(md, source="b.md", chunk_size=200, chunk_overlap=10)
     assert {c.chunk_id for c in a}.isdisjoint({c.chunk_id for c in b})
+
+
+def test_indented_code_block_content_is_preserved():
+    md = "# Doc\n\nIntro paragraph.\n\n    indented_code_line_alpha = 1\n    indented_code_line_beta = 2\n\nAfter code.\n"
+    chunks = chunk_markdown(md, source="c.md", chunk_size=500, chunk_overlap=10)
+    joined = "\n".join(c.text for c in chunks)
+    assert "indented_code_line_alpha" in joined
+    assert "indented_code_line_beta" in joined
