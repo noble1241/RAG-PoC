@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     conversion_timeout_seconds: int = 30
 
+    # Debug / inspection: dump the Markdown produced by MarkItDown to disk so
+    # the raw conversion output can be inspected. Files land in
+    # <backend>/<converted_output_dir>/<original-filename>.md
+    save_converted_markdown: bool = True
+    converted_output_dir: str = "converted_output"
+
     # Server
     allowed_origins: list[str] = ["http://localhost:5173"]
     log_level: str = "INFO"

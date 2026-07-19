@@ -169,3 +169,19 @@ async def test_upload_corrupt_pdf_returns_422(client, _mock_ingest):
     files = {"file": ("broken.pdf", b"%PDF-1.7 broken\x00\x01\x02", "application/pdf")}
     r = await client.post("/documents/upload", files=files)
     assert r.status_code == 422
+
+
+async def test_upload_dumps_converted_markdown_to_disk(client, _mock_ingest, tmp_path, monkeypatch):
+    # Redirect the dump directory to a temp path and confirm the raw converted
+    # Markdown is written as "<filename>.md".
+    monkeypatch.setattr(docs_mod.settings, "save_converted_markdown", True)
+    monkeypatch.setattr(docs_mod.settings, "converted_output_dir", str(tmp_path))
+    files = {"file": ("people.csv", b"name,role\nAlice,eng\nBob,pm\n", "text/csv")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 201
+
+    saved = tmp_path / "people.csv.md"
+    assert saved.exists()
+    content = saved.read_text(encoding="utf-8")
+    assert "Alice" in content
+    assert "|" in content  # markdown table from the CSV

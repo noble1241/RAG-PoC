@@ -4,10 +4,12 @@ import asyncio
 import datetime
 import hashlib
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
+from app.artifacts import dump_markdown
 from app.chunking import chunk_markdown
 from app.config import settings
 from app.conversion import SUPPORTED_EXTENSIONS, get_converter
@@ -19,6 +21,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# backend/ root — resolves a relative converted_output_dir predictably,
+# regardless of the process CWD. (routes/ -> app/ -> backend/)
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 async def _ingest_text(text: str, source: str) -> IngestResponse:
@@ -111,5 +117,17 @@ async def ingest_file(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Could not parse file: {exc}",
         )
+
+    # Dump the raw converted Markdown to disk for inspection (best-effort — a
+    # failure here must never break ingestion).
+    if settings.save_converted_markdown:
+        try:
+            out_dir = Path(settings.converted_output_dir)
+            if not out_dir.is_absolute():
+                out_dir = _BACKEND_DIR / out_dir
+            saved = dump_markdown(markdown, filename, out_dir)
+            logger.info("Saved converted markdown to %s", saved)
+        except Exception:
+            logger.exception("Failed to save converted markdown for %s", filename)
 
     return await _ingest_text(text=markdown, source=filename)
