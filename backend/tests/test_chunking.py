@@ -98,3 +98,15 @@ def test_hash_inside_code_fence_is_not_a_heading():
     # Only one heading path exists; the '#' comment must not create a section.
     paths = {tuple(c.heading_path) for c in chunks}
     assert paths == {("Real",)}
+
+
+def test_large_table_splits_by_rows_repeating_header():
+    rows = "\n".join(f"| r{i} | v{i} |" for i in range(200))
+    md = f"# T\n\n| name | value |\n| --- | --- |\n{rows}\n"
+    chunks = chunk_markdown(md, source="t.md", chunk_size=120, chunk_overlap=0)
+    table_chunks = [c for c in chunks if "| name | value |" in c.text]
+    assert len(table_chunks) > 1  # split into multiple parts
+    for c in table_chunks:
+        # every part re-emits the header + separator so it stays a valid table
+        assert "| name | value |" in c.text
+        assert "| --- | --- |" in c.text

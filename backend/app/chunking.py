@@ -111,6 +111,28 @@ def _overlap_tail(body: str, enc: "tiktoken.Encoding", chunk_overlap: int) -> tu
     return [enc.decode(tail)], len(tail)
 
 
+def _split_table(table_md: str, enc: "tiktoken.Encoding", budget: int) -> list[str]:
+    rows = [r for r in table_md.split("\n") if r.strip()]
+    if len(rows) < 2:
+        return _hard_split(table_md, enc, budget)
+    header, sep, body_rows = rows[0], rows[1], rows[2:]
+    head = f"{header}\n{sep}"
+    parts: list[str] = []
+    cur = [header, sep]
+    cur_tokens = len(enc.encode(head))
+    for r in body_rows:
+        rtoks = len(enc.encode(r))
+        if len(cur) > 2 and cur_tokens + rtoks > budget:
+            parts.append("\n".join(cur))
+            cur = [header, sep]
+            cur_tokens = len(enc.encode(head))
+        cur.append(r)
+        cur_tokens += rtoks
+    if len(cur) > 2:
+        parts.append("\n".join(cur))
+    return parts or [table_md]
+
+
 def _section_bodies(
     section: _Section,
     enc: "tiktoken.Encoding",
@@ -130,6 +152,8 @@ def _section_bodies(
     for b in section.blocks:
         if len(enc.encode(b.text)) <= budget:
             units.append(b.text)
+        elif b.kind == "table":
+            units.extend(_split_table(b.text, enc, split_budget))
         else:
             units.extend(_hard_split(b.text, enc, split_budget))
 
