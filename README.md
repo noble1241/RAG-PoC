@@ -42,7 +42,7 @@ npm run dev
 | GET | /health | Liveness check |
 | GET | /ready | Readiness check (verifies Chroma) |
 | POST | /documents | Ingest text `{"text":"...", "source":"name"}` |
-| POST | /documents/upload | Ingest file (.txt / .md / .pdf) |
+| POST | /documents/upload | Ingest file (.pdf / .docx / .xlsx / .xls / .pptx / .csv / .txt / .md — converted to Markdown via MarkItDown) |
 | POST | /chat | Chat query `{"query":"..."}` → SSE stream |
 
 ### POST /chat response (SSE)

@@ -122,11 +122,11 @@ export default function App() {
 
         <div className="file-upload">
           <label className="btn btn-secondary">
-            Upload File (.txt / .md / .pdf)
+            Upload File (.pdf / .docx / .xlsx / .xls / .pptx / .csv / .txt / .md)
             <input
               ref={fileRef}
               type="file"
-              accept=".txt,.md,.pdf"
+              accept=".pdf,.docx,.xlsx,.xls,.pptx,.csv,.txt,.md"
               onChange={handleFileUpload}
               hidden
             />
