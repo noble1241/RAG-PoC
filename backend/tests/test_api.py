@@ -123,3 +123,65 @@ async def test_ingest_unsupported_file_type(client):
         files={"file": ("test.exe", BytesIO(b"data"), "application/octet-stream")},
     )
     assert r.status_code == 415
+
+
+import app.routes.documents as docs_mod
+
+
+@pytest.fixture()
+def _mock_ingest(monkeypatch):
+    async def fake_embed(texts):
+        return [[0.0, 0.0, 0.0] for _ in texts]
+
+    async def fake_upsert(**kwargs):
+        return None
+
+    monkeypatch.setattr(docs_mod, "embed_texts", fake_embed)
+    monkeypatch.setattr(docs_mod, "upsert_chunks", fake_upsert)
+
+
+async def test_upload_csv_ok(client, _mock_ingest):
+    files = {"file": ("people.csv", b"name,role\nAlice,eng\nBob,pm\n", "text/csv")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 201
+    body = r.json()
+    assert body["source"] == "people.csv"
+    assert body["chunk_count"] >= 1
+
+
+async def test_upload_unsupported_extension_rejected(client):
+    files = {"file": ("malware.exe", b"MZ\x90\x00", "application/octet-stream")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 415
+
+
+async def test_upload_too_large_rejected(client):
+    big = b"x" * (10 * 1024 * 1024 + 1)
+    files = {"file": ("big.txt", big, "text/plain")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 413
+
+
+async def test_upload_corrupt_pdf_returns_422(client, _mock_ingest):
+    # Must carry the %PDF magic bytes so MarkItDown's content sniffing commits
+    # to the PDF converter (no plaintext fallback); the malformed structure
+    # after that then makes pdfminer raise, which the route maps to 422.
+    files = {"file": ("broken.pdf", b"%PDF-1.7 broken\x00\x01\x02", "application/pdf")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 422
+
+
+async def test_upload_dumps_converted_markdown_to_disk(client, _mock_ingest, tmp_path, monkeypatch):
+    # Redirect the dump directory to a temp path and confirm the raw converted
+    # Markdown is written as "<filename>.md".
+    monkeypatch.setattr(docs_mod.settings, "save_converted_markdown", True)
+    monkeypatch.setattr(docs_mod.settings, "converted_output_dir", str(tmp_path))
+    files = {"file": ("people.csv", b"name,role\nAlice,eng\nBob,pm\n", "text/csv")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 201
+
+    saved = tmp_path / "people.csv.md"
+    assert saved.exists()
+    content = saved.read_text(encoding="utf-8")
+    assert "Alice" in content
+    assert "|" in content  # markdown table from the CSV

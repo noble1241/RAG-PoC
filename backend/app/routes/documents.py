@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import hashlib
 import logging
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
-from app.chunking import chunk_text
+from app.artifacts import dump_markdown
+from app.chunking import chunk_markdown
 from app.config import settings
+from app.conversion import SUPPORTED_EXTENSIONS, get_converter
 from app.llm import embed_texts
 from app.schemas import IngestResponse, IngestTextRequest
 from app.vectorstore import upsert_chunks
@@ -18,34 +22,23 @@ router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
-
-def _extract_pdf_text(data: bytes) -> str:
-    from pypdf import PdfReader
-    import io
-    import re
-
-    reader = PdfReader(io.BytesIO(data))
-    pages = []
-    for page in reader.pages:
-        text = page.extract_text(extraction_mode="layout") or ""
-        # Collapse runs of multiple spaces into one (PDF spacing artifacts)
-        text = re.sub(r" {2,}", " ", text)
-        # Remove spaces between single characters (e.g. "h e l l o" → "hello")
-        text = re.sub(r"(?<!\w)(\w) (?=\w )", r"\1", text)
-        text = re.sub(r"(?<!\w)(\w) (?=\w\b)", r"\1", text)
-        pages.append(text.strip())
-    return "\n\n".join(p for p in pages if p)
+# backend/ root — resolves a relative converted_output_dir predictably,
+# regardless of the process CWD. (routes/ -> app/ -> backend/)
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 async def _ingest_text(text: str, source: str) -> IngestResponse:
-    chunks = chunk_text(
+    chunks = chunk_markdown(
         text=text,
         source=source,
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
     )
     if not chunks:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="No text content found")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="No text content found",
+        )
 
     doc_id = hashlib.sha256(source.encode()).hexdigest()[:16]
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -60,6 +53,7 @@ async def _ingest_text(text: str, source: str) -> IngestResponse:
             "chunk_index": c.chunk_index,
             "ingested_at": ts,
             "content_hash": c.content_hash,
+            "heading_path": " > ".join(c.heading_path),
         }
         for c in chunks
     ]
@@ -95,23 +89,45 @@ async def ingest_file(
     filename = file.filename or "upload"
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
-    if ext not in {"txt", "md", "pdf"}:
+    if ext not in SUPPORTED_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Only .txt, .md, and .pdf files are supported",
+            detail="Unsupported file type. Supported: "
+            + ", ".join(sorted(SUPPORTED_EXTENSIONS)),
         )
 
     data = await file.read()
     if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File too large (max 10 MB)")
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="File too large (max 10 MB)",
+        )
 
     try:
-        if ext == "pdf":
-            text = _extract_pdf_text(data)
-        else:
-            text = data.decode("utf-8", errors="replace")
+        markdown = await get_converter().to_markdown(data, filename)
+    except asyncio.TimeoutError:
+        logger.warning("Conversion timed out for %s", filename)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="File conversion timed out",
+        )
     except Exception as exc:
-        logger.exception("Failed to parse file %s", filename)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Could not parse file: {exc}")
+        logger.exception("Failed to convert file %s", filename)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Could not parse file: {exc}",
+        )
 
-    return await _ingest_text(text=text, source=filename)
+    # Dump the raw converted Markdown to disk for inspection (best-effort — a
+    # failure here must never break ingestion).
+    if settings.save_converted_markdown:
+        try:
+            out_dir = Path(settings.converted_output_dir)
+            if not out_dir.is_absolute():
+                out_dir = _BACKEND_DIR / out_dir
+            saved = dump_markdown(markdown, filename, out_dir)
+            logger.info("Saved converted markdown to %s", saved)
+        except Exception:
+            logger.exception("Failed to save converted markdown for %s", filename)
+
+    return await _ingest_text(text=markdown, source=filename)

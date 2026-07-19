@@ -20,3 +20,9 @@ frontend/dist/
 
 # macOS
 .DS_Store
+
+# SDD execution scratch
+.superpowers/
+
+# Converted-markdown inspection artifacts
+backend/converted_output/

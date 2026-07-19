@@ -42,7 +42,7 @@ npm run dev
 | GET | /health | Liveness check |
 | GET | /ready | Readiness check (verifies Chroma) |
 | POST | /documents | Ingest text `{"text":"...", "source":"name"}` |
-| POST | /documents/upload | Ingest file (.txt / .md / .pdf) |
+| POST | /documents/upload | Ingest file (.pdf / .docx / .xlsx / .xls / .pptx / .csv / .txt / .md — converted to Markdown via MarkItDown) |
 | POST | /chat | Chat query `{"query":"..."}` → SSE stream |
 
 ### POST /chat response (SSE)
@@ -83,6 +83,9 @@ All config via environment variables (see `.env.example`):
 | TOP_K | 4 | Retrieved chunks per query |
 | CHUNK_SIZE | 500 | Tokens per chunk |
 | CHUNK_OVERLAP | 50 | Token overlap between chunks |
+| CONVERSION_TIMEOUT_SECONDS | 30 | Max seconds for MarkItDown to convert one upload |
+| SAVE_CONVERTED_MARKDOWN | true | Dump each upload's converted Markdown to disk for inspection |
+| CONVERTED_OUTPUT_DIR | converted_output | Where converted `<filename>.md` files are written (relative to `backend/`) |
 | ALLOWED_ORIGINS | ["http://localhost:5173"] | CORS allowed origins |
 | LOG_LEVEL | INFO | Logging level |
 
