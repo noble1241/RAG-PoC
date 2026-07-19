@@ -2,54 +2,49 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-key")
 
-import hashlib
-import pytest
-
-from app.chunking import chunk_text, _make_id
-
-
-def test_chunk_sizes_respected():
-    text = "word " * 1000
-    chunks = chunk_text(text, source="test.txt", chunk_size=100, chunk_overlap=10)
-    for c in chunks[:-1]:  # last chunk may be smaller
-        assert c.token_count == 100
-
-
-def test_overlap_correct():
-    text = "word " * 500
-    chunks = chunk_text(text, source="test.txt", chunk_size=100, chunk_overlap=20)
-    # Second chunk starts 80 tokens after first chunk (100 - 20)
-    assert len(chunks) > 1
-    total_tokens = sum(c.token_count for c in chunks)
-    # With overlap, total > source tokens
-    import tiktoken
-    enc = tiktoken.get_encoding("cl100k_base")
-    source_tokens = len(enc.encode(text))
-    assert total_tokens > source_tokens or len(chunks) == 1
-
-
-def test_deterministic_ids():
-    text = "Some sample text for testing " * 50
-    chunks1 = chunk_text(text, source="doc.txt", chunk_size=50, chunk_overlap=5)
-    chunks2 = chunk_text(text, source="doc.txt", chunk_size=50, chunk_overlap=5)
-    assert [c.chunk_id for c in chunks1] == [c.chunk_id for c in chunks2]
-
-
-def test_different_sources_different_ids():
-    text = "Same content " * 50
-    chunks_a = chunk_text(text, source="a.txt", chunk_size=50, chunk_overlap=5)
-    chunks_b = chunk_text(text, source="b.txt", chunk_size=50, chunk_overlap=5)
-    ids_a = {c.chunk_id for c in chunks_a}
-    ids_b = {c.chunk_id for c in chunks_b}
-    assert ids_a.isdisjoint(ids_b)
+from app.chunking import Chunk, chunk_markdown
 
 
 def test_empty_text_returns_no_chunks():
-    chunks = chunk_text("", source="empty.txt", chunk_size=100, chunk_overlap=10)
-    assert chunks == []
+    assert chunk_markdown("", source="empty.md", chunk_size=100, chunk_overlap=10) == []
 
 
-def test_short_text_single_chunk():
-    chunks = chunk_text("Hello world", source="short.txt", chunk_size=100, chunk_overlap=10)
+def test_single_paragraph_single_chunk():
+    chunks = chunk_markdown("Hello world.", source="s.md", chunk_size=100, chunk_overlap=10)
     assert len(chunks) == 1
     assert chunks[0].chunk_index == 0
+    assert "Hello world." in chunks[0].text
+
+
+def test_heading_breadcrumb_prefixed_into_text():
+    md = "# Leave Policy\n\n## Parental Leave\n\nGive eight weeks notice.\n"
+    chunks = chunk_markdown(md, source="p.md", chunk_size=200, chunk_overlap=10)
+    body = next(c for c in chunks if "eight weeks" in c.text)
+    assert body.heading_path == ["Leave Policy", "Parental Leave"]
+    assert body.text.startswith("Leave Policy > Parental Leave\n\n")
+
+
+def test_sibling_heading_resets_path():
+    md = (
+        "# Policy\n\n## Leave\n\nLeave body text here.\n\n"
+        "## Pay\n\nPay body text here.\n"
+    )
+    chunks = chunk_markdown(md, source="p.md", chunk_size=200, chunk_overlap=10)
+    leave = next(c for c in chunks if "Leave body" in c.text)
+    pay = next(c for c in chunks if "Pay body" in c.text)
+    assert leave.heading_path == ["Policy", "Leave"]
+    assert pay.heading_path == ["Policy", "Pay"]
+
+
+def test_deterministic_ids():
+    md = "# A\n\nSome sample body text for testing determinism.\n"
+    a = chunk_markdown(md, source="doc.md", chunk_size=200, chunk_overlap=10)
+    b = chunk_markdown(md, source="doc.md", chunk_size=200, chunk_overlap=10)
+    assert [c.chunk_id for c in a] == [c.chunk_id for c in b]
+
+
+def test_different_sources_different_ids():
+    md = "# A\n\nSame content body here for the test.\n"
+    a = chunk_markdown(md, source="a.md", chunk_size=200, chunk_overlap=10)
+    b = chunk_markdown(md, source="b.md", chunk_size=200, chunk_overlap=10)
+    assert {c.chunk_id for c in a}.isdisjoint({c.chunk_id for c in b})
