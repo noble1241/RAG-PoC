@@ -56,3 +56,29 @@ def test_indented_code_block_content_is_preserved():
     joined = "\n".join(c.text for c in chunks)
     assert "indented_code_line_alpha" in joined
     assert "indented_code_line_beta" in joined
+
+
+import tiktoken
+
+
+def _tok(text: str) -> int:
+    return len(tiktoken.get_encoding("cl100k_base").encode(text))
+
+
+def test_oversized_section_splits_with_overlap():
+    body = " ".join(f"word{i}" for i in range(2000))
+    md = f"# Big\n\n{body}\n"
+    chunks = chunk_markdown(md, source="big.md", chunk_size=200, chunk_overlap=20)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert c.token_count <= 200 + 5  # small tolerance for prefix/decoding
+    # overlap: total tokens across chunks exceeds a single pass of the source
+    assert sum(c.token_count for c in chunks) > _tok(body)
+
+
+def test_hash_inside_code_fence_is_not_a_heading():
+    md = "# Real\n\n```python\n# this is a comment, not a heading\nx = 1\n```\n"
+    chunks = chunk_markdown(md, source="code.md", chunk_size=500, chunk_overlap=10)
+    # Only one heading path exists; the '#' comment must not create a section.
+    paths = {tuple(c.heading_path) for c in chunks}
+    assert paths == {("Real",)}

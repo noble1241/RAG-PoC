@@ -98,15 +98,56 @@ def _with_breadcrumb(heading_path: list[str], body: str) -> str:
     return f"{crumb}\n\n{body}" if crumb else body
 
 
+def _hard_split(text: str, enc: "tiktoken.Encoding", budget: int) -> list[str]:
+    toks = enc.encode(text)
+    return [enc.decode(toks[i : i + budget]) for i in range(0, len(toks), budget)]
+
+
+def _overlap_tail(body: str, enc: "tiktoken.Encoding", chunk_overlap: int) -> tuple[list[str], int]:
+    if chunk_overlap <= 0:
+        return [], 0
+    toks = enc.encode(body)
+    tail = toks[-chunk_overlap:]
+    return [enc.decode(tail)], len(tail)
+
+
 def _section_bodies(
     section: _Section,
     enc: "tiktoken.Encoding",
     chunk_size: int,
     chunk_overlap: int,
 ) -> list[str]:
-    # NAIVE: one body per section. Task 4 replaces this with token-bounded packing.
-    body = "\n\n".join(b.text for b in section.blocks).strip()
-    return [body] if body else []
+    # Reserve token room for the breadcrumb prefix that will be prepended later.
+    crumb = _breadcrumb(section.heading_path)
+    prefix_tokens = len(enc.encode(f"{crumb}\n\n")) if crumb else 0
+    budget = max(chunk_size - prefix_tokens, 1)
+
+    # Expand any block that is itself larger than the budget into sub-units.
+    # Hard-split pieces are sized to leave headroom for the overlap tail that
+    # gets prepended to the next packed body, so tail + unit still fits budget.
+    split_budget = max(budget - chunk_overlap, 1)
+    units: list[str] = []
+    for b in section.blocks:
+        if len(enc.encode(b.text)) <= budget:
+            units.append(b.text)
+        else:
+            units.extend(_hard_split(b.text, enc, split_budget))
+
+    bodies: list[str] = []
+    cur: list[str] = []
+    cur_tokens = 0
+    for u in units:
+        utoks = len(enc.encode(u))
+        if cur and cur_tokens + utoks > budget:
+            bodies.append("\n\n".join(cur).strip())
+            cur, cur_tokens = _overlap_tail(bodies[-1], enc, chunk_overlap)
+        cur.append(u)
+        cur_tokens += utoks
+    if cur:
+        joined = "\n\n".join(cur).strip()
+        if joined:
+            bodies.append(joined)
+    return bodies
 
 
 def chunk_markdown(
