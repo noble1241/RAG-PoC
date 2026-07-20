@@ -118,9 +118,6 @@ def structure_document(
     ) if table_free_md.strip() else []
 
     enc = tiktoken.get_encoding(encoding_name)
-    # Reserve budget for the summary line when splitting oversized tables.
-    empty_summary_tokens = len(enc.encode(render_table_summary([], [], "")))
-    split_budget = max(chunk_size - empty_summary_tokens, 1)
 
     table_chunks: list[TableChunk] = []
     idx = len(narrative)  # continue the document's index space after narrative
@@ -128,8 +125,20 @@ def structure_document(
         for b in sec.blocks:
             if b.kind != "table":
                 continue
-            single = render_table_summary(sec.heading_path, parse_markdown_table(b.text), b.text)
-            parts = [b.text] if len(enc.encode(single)) <= chunk_size else split_table(b.text, enc, split_budget)
+            full_rows = parse_markdown_table(b.text)
+            single = render_table_summary(sec.heading_path, full_rows, b.text)
+            if len(enc.encode(single)) <= chunk_size:
+                parts = [b.text]
+            else:
+                # Reserve budget for the REAL breadcrumb + summary overhead
+                # (using this section's heading path and this table's actual
+                # rows) rather than the overhead of an empty table, otherwise
+                # rendered split parts can exceed chunk_size. Using the full
+                # table's row count for the "(N rows)" digits over-reserves
+                # slightly for the smaller split parts -- the safe direction.
+                overhead = len(enc.encode(render_table_summary(sec.heading_path, full_rows, "")))
+                split_budget = max(chunk_size - overhead, 1)
+                parts = split_table(b.text, enc, split_budget)
             for part in parts:
                 rows = parse_markdown_table(part)
                 text = render_table_summary(sec.heading_path, rows, part)

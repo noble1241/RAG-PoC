@@ -109,3 +109,28 @@ def test_table_and_narrative_ids_are_disjoint_and_deterministic():
     b_ids = [c.chunk_id for c in b.narrative_chunks] + [c.chunk_id for c in b.table_chunks]
     assert a_ids == b_ids                 # deterministic
     assert len(a_ids) == len(set(a_ids))  # no collisions
+
+
+def test_oversized_table_split_respects_chunk_size_with_long_heading_path():
+    # Regression test: split_budget must be derived from the REAL heading path
+    # and REAL row count overhead, not from an empty-args render. A long,
+    # non-trivial heading path plus a table too big for one chunk forces the
+    # split_table(...) branch in structure_document.
+    rows = "\n".join(f"| r{i} | v{i} |" for i in range(40))
+    md = (
+        "# A\n\n"
+        "## B\n\n"
+        "| name | value |\n"
+        "| --- | --- |\n"
+        f"{rows}\n"
+    )
+    doc = structure_document(
+        markdown=md, source="big_table.docx", file_type="docx",
+        ingested_at="2026-07-20T00:00:00Z", chunk_size=80, chunk_overlap=0,
+    )
+    assert len(doc.table_chunks) > 1  # forced the split branch
+    for c in doc.table_chunks:
+        assert c.token_count <= 80 + 5, f"chunk {c.chunk_index} has {c.token_count} tokens"
+        # every part re-emits the header + separator so it stays a valid table
+        assert "| name | value |" in c.text
+        assert "| --- | --- |" in c.text
