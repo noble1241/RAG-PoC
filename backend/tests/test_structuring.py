@@ -115,11 +115,14 @@ def test_oversized_table_split_respects_chunk_size_with_long_heading_path():
     # Regression test: split_budget must be derived from the REAL heading path
     # and REAL row count overhead, not from an empty-args render. A long,
     # non-trivial heading path plus a table too big for one chunk forces the
-    # split_table(...) branch in structure_document.
+    # split_table(...) branch in structure_document. The heading path below is
+    # deliberately long: with the empty-args (buggy) overhead calculation the
+    # reserved budget undercounts the breadcrumb, so split parts exceed
+    # chunk_size + 5; with the real per-section overhead they stay within it.
     rows = "\n".join(f"| r{i} | v{i} |" for i in range(40))
     md = (
-        "# A\n\n"
-        "## B\n\n"
+        "# Introduction and Background of the Corporate Data Governance Program\n\n"
+        "## Detailed Retention Schedule and Classification Matrix for All Business Units\n\n"
         "| name | value |\n"
         "| --- | --- |\n"
         f"{rows}\n"
