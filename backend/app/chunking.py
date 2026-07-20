@@ -210,3 +210,12 @@ def chunk_markdown(
             )
             idx += 1
     return chunks
+
+
+# Public aliases so the structuring layer (app.structuring) can reuse the same
+# block parser + helpers. This keeps table heading-paths consistent with
+# narrative chunks. No behavior change to the functions themselves.
+parse_blocks = _parse_blocks
+group_sections = _group_sections
+split_table = _split_table
+make_id = _make_id

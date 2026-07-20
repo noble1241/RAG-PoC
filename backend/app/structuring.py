@@ -1,7 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
+
+import tiktoken
+
+from app.chunking import (
+    Chunk,
+    chunk_markdown,
+    group_sections,
+    make_id,
+    parse_blocks,
+    split_table,
+)
 
 # Unescape backslash-escaped Markdown punctuation MarkItDown emits in cells
 # (e.g. "leave\_type" -> "leave_type").
@@ -78,3 +90,61 @@ def render_table_summary(heading_path: list[str], rows: list[dict], table_md: st
     parts.append(summary)
     parts.append(table_md.strip())
     return "\n\n".join(parts)
+
+
+def structure_document(
+    markdown: str,
+    source: str,
+    file_type: str,
+    ingested_at: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    encoding_name: str = "cl100k_base",
+) -> StructuredDocument:
+    """Split MarkItDown output into narrative chunks (via the existing
+    chunk_markdown) and separate table chunks that carry their section's
+    heading path. Pure function: no I/O, no embedding, no Chroma."""
+    metadata = {"source": source, "file_type": file_type, "ingested_at": ingested_at}
+    if not markdown or not markdown.strip():
+        return StructuredDocument(metadata=metadata, narrative_chunks=[], table_chunks=[])
+
+    blocks = parse_blocks(markdown)
+
+    # Narrative = the whole document with table blocks removed, handed to the
+    # existing chunker unchanged so it stays the single owner of sectioning.
+    table_free_md = "\n\n".join(b.text for b in blocks if b.kind != "table")
+    narrative: list[Chunk] = chunk_markdown(
+        table_free_md, source, chunk_size, chunk_overlap, encoding_name
+    ) if table_free_md.strip() else []
+
+    enc = tiktoken.get_encoding(encoding_name)
+    # Reserve budget for the summary line when splitting oversized tables.
+    empty_summary_tokens = len(enc.encode(render_table_summary([], [], "")))
+    split_budget = max(chunk_size - empty_summary_tokens, 1)
+
+    table_chunks: list[TableChunk] = []
+    idx = len(narrative)  # continue the document's index space after narrative
+    for sec in group_sections(blocks):
+        for b in sec.blocks:
+            if b.kind != "table":
+                continue
+            single = render_table_summary(sec.heading_path, parse_markdown_table(b.text), b.text)
+            parts = [b.text] if len(enc.encode(single)) <= chunk_size else split_table(b.text, enc, split_budget)
+            for part in parts:
+                rows = parse_markdown_table(part)
+                text = render_table_summary(sec.heading_path, rows, part)
+                content_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+                table_chunks.append(
+                    TableChunk(
+                        text=text,
+                        rows=rows,
+                        source=source,
+                        chunk_index=idx,
+                        token_count=len(enc.encode(text)),
+                        content_hash=content_hash,
+                        chunk_id=make_id(source, idx, content_hash),
+                        heading_path=list(sec.heading_path),
+                    )
+                )
+                idx += 1
+    return StructuredDocument(metadata=metadata, narrative_chunks=narrative, table_chunks=table_chunks)
