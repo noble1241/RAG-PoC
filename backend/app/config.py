@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # <backend>/<converted_output_dir>/<original-filename>.md
     save_converted_markdown: bool = True
     converted_output_dir: str = "converted_output"
+    manifest_filename: str = "manifest.json"
 
     # Server
     allowed_origins: list[str] = ["http://localhost:5173"]

@@ -185,3 +185,39 @@ async def test_upload_dumps_converted_markdown_to_disk(client, _mock_ingest, tmp
     content = saved.read_text(encoding="utf-8")
     assert "Alice" in content
     assert "|" in content  # markdown table from the CSV
+
+
+async def test_upload_table_has_content_type_and_rows_metadata(client, monkeypatch):
+    captured: dict = {}
+
+    async def fake_embed(texts):
+        return [[0.0, 0.0, 0.0] for _ in texts]
+
+    async def fake_upsert(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(docs_mod, "embed_texts", fake_embed)
+    monkeypatch.setattr(docs_mod, "upsert_chunks", fake_upsert)
+
+    files = {"file": ("leave.csv", b"leave_type,annual_days\nParental,42\nSick,10\n", "text/csv")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 201
+
+    metas = captured["metadatas"]
+    assert all("content_type" in m for m in metas)
+    table_meta = next(m for m in metas if m["content_type"] == "table-summary")
+    rows = json.loads(table_meta["table_rows"])
+    assert {"leave_type": "Parental", "annual_days": "42"} in rows
+
+
+async def test_upload_updates_manifest(client, _mock_ingest, monkeypatch, tmp_path):
+    monkeypatch.setattr(docs_mod.settings, "converted_output_dir", str(tmp_path))
+    files = {"file": ("leave.csv", b"leave_type,annual_days\nParental,42\n", "text/csv")}
+    r = await client.post("/documents/upload", files=files)
+    assert r.status_code == 201
+
+    manifest = tmp_path / "manifest.json"
+    assert manifest.exists()
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    assert "leave.csv" in data
+    assert len(data["leave.csv"]["table_ids"]) == 1
