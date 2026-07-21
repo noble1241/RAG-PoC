@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.config import settings
-from app.routes import chat, documents, health
+from app.routes import chat, documents, health, policy
 
 # ── Structured JSON logging ────────────────────────────────────────────────────
 logging.config.dictConfig(
@@ -77,4 +77,5 @@ async def correlation_id_middleware(request: Request, call_next):
 # ── Routers ────────────────────────────────────────────────────────────────────
 app.include_router(health.router, tags=["ops"])
 app.include_router(documents.router, tags=["ingestion"])
+app.include_router(policy.router, tags=["ingestion"])
 app.include_router(chat.router, tags=["chat"])
