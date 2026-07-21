@@ -43,6 +43,7 @@ npm run dev
 | GET | /ready | Readiness check (verifies Chroma) |
 | POST | /documents | Ingest text `{"text":"...", "source":"name"}` |
 | POST | /documents/upload | Ingest file (.pdf / .docx / .xlsx / .xls / .pptx / .csv / .txt / .md — converted to Markdown via MarkItDown) |
+| POST | /documents/extract-policy | Extract structured PolicyDocument(s) from a policy file → JSON artifacts + RAG ingest (SSE not used). Optional `?sheet=&policy=` |
 | POST | /chat | Chat query `{"query":"..."}` → SSE stream |
 
 ### POST /chat response (SSE)
