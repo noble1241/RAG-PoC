@@ -119,8 +119,10 @@ upload → MarkItDown (reused) → [optional ?sheet= slice] → enumerate_polici
   Extraction is document-agnostic now: a grid workbook fans out into one PolicyDocument per
   policy *column* automatically (via enumeration), and prose PDFs/DOCX enumerate to one.
 - **`policy_rag.py`** — `policy_to_chunks()` (pure) flattens a PolicyDocument into clean,
-  well-labeled chunks (one metadata + one per service + one per item, each with a
-  `policy > service > category > item` breadcrumb and structured metadata); `ingest_policy()`
+  well-labeled chunks: one metadata chunk, one per service *that has* operational
+  guidelines / vendor / document constraints (services with none are skipped), and one per
+  item — each with a `policy > service > category > item` breadcrumb and structured
+  metadata; `ingest_policy()`
   embeds + upserts + records the manifest via the unchanged seams. Per-policy `source` is
   `"<filename> [<policy name>]"`, so multiple policies from one workbook get disjoint
   deterministic IDs and separate manifest entries.
@@ -130,10 +132,12 @@ upload → MarkItDown (reused) → [optional ?sheet= slice] → enumerate_polici
   duplicated preamble); `resolve_backend_dir()` / `BACKEND_DIR` resolve output dirs.
 
 Config: `POLICY_EXTRACTION_MODEL` (defaults to `CHAT_MODEL`; gpt-4o recommended) and
-`POLICY_OUTPUT_DIR` (default `policies`). Errors: 415/413/422 mirror the upload route;
-enumeration→0 policies is 422; per-policy extraction/ingest failures are collected in
-`errors[]` (partial success) and only 422 if *every* policy fails; JSON-write failure is
-non-fatal. Retrieval/chat are unchanged — extracted chunks are queried like any others.
+`POLICY_OUTPUT_DIR` (default `policies`). Errors: 415/413/422 mirror the upload route (via
+the shared `read_and_convert_upload`); a failure in `enumerate_policies()` itself maps to
+502; enumeration→0 policies (after the optional `policy` filter) is 422; per-policy
+extraction/ingest failures are collected in `errors[]` (partial success) and only 422 if
+*every* policy fails; JSON-write failure is non-fatal. Retrieval/chat are unchanged —
+extracted chunks are queried like any others.
 
 ## Env files
 - `backend/.env` (from `backend/.env.example`): `OPENAI_API_KEY` (required, validated to not be the placeholder), `CHROMA_HOST/PORT/COLLECTION`, `EMBEDDING_MODEL`, `CHAT_MODEL`, `TOP_K`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `CONVERSION_TIMEOUT_SECONDS`, `ALLOWED_ORIGINS`, `LOG_LEVEL`
