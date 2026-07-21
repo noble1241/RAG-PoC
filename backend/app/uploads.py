@@ -52,10 +52,11 @@ async def read_and_convert_upload(file: UploadFile) -> tuple[str, str, str, str 
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="File conversion timed out"
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Failed to convert file %s", filename)
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Could not parse file: {exc}"
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Could not parse file: the document is invalid or unsupported by the converter.",
         )
 
     converted_rel: str | None = None
