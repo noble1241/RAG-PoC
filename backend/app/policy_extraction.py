@@ -147,6 +147,12 @@ class ServiceNames(BaseModel):
     services: list[str] = Field(description="Distinct top-level service/benefit names, in document order.")
 
 
+class PolicyNames(BaseModel):
+    policies: list[str] = Field(
+        description="Distinct policy names / policy-column labels present, in document order."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Extraction
 # --------------------------------------------------------------------------- #
@@ -173,6 +179,16 @@ captures place-specific rules (e.g. Guam, San Francisco); `vendor_constraints` \
 captures required-provider rules (e.g. must book with Ave/Manilow/Bayview).
 - Preserve the source wording in `rule`/`description`; summarize only in the \
 derived fields (conditions/approval_details/notes).
+"""
+
+_ENUMERATE_SYSTEM = """\
+You identify the distinct policies in a document converted to Markdown. A workbook \
+grid may place several policies as side-by-side columns; a prose document usually \
+contains exactly one policy.
+
+Return the distinct policy names / policy-column labels, in document order. In a grid, \
+use the label at the top of each policy column (e.g. 'Career Move', 'Company Request'). \
+In a single-policy document, return exactly one name. Do not invent policies.
 """
 
 
@@ -280,6 +296,37 @@ def extract_policy_per_service(
     return PolicyDocument(
         policy_name=header.policy_name, policy_metadata=header.policy_metadata, services=services
     )
+
+
+def enumerate_policies(
+    markdown: str, *, model: str | None = None, client: OpenAI | None = None
+) -> list[str]:
+    """List the distinct policies present in a document's Markdown via one
+    structured-output LLM call. A single-policy prose doc returns one name; a
+    multi-policy grid returns one label per policy column."""
+    client = client or OpenAI(api_key=settings.openai_api_key)
+    model = model or settings.chat_model
+    return _parse(client, model, _ENUMERATE_SYSTEM, markdown, PolicyNames).policies
+
+
+def scope_to_section(markdown: str, heading: str) -> str:
+    """Return only the Markdown under the first `## <heading>` section (case-insensitive
+    substring match on the heading text). If no `## ` heading matches, return the
+    Markdown unchanged so a bad filter never discards the whole document."""
+    lines = markdown.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("## ") and heading.lower() in line[3:].strip().lower():
+            start = i
+            break
+    if start is None:
+        return markdown
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## "):
+            end = j
+            break
+    return "\n".join(lines[start:end])
 
 
 # --------------------------------------------------------------------------- #
