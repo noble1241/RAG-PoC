@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     converted_output_dir: str = "converted_output"
     manifest_filename: str = "manifest.json"
 
+    # Policy extraction (dedicated /documents/extract-policy path)
+    policy_extraction_model: str | None = None  # falls back to chat_model; gpt-4o recommended
+    policy_output_dir: str = "policies"  # where per-policy JSON is written (relative to backend/)
+
     # Server
     allowed_origins: list[str] = ["http://localhost:5173"]
     log_level: str = "INFO"

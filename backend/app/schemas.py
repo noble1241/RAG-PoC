@@ -52,3 +52,21 @@ class HealthResponse(BaseModel):
 class ReadyResponse(BaseModel):
     status: str
     chroma: str
+
+
+class PolicyExtractionResult(BaseModel):
+    policy_name: str
+    chunk_count: int
+    item_count: int
+    json_path: str | None = None
+
+
+class PolicyExtractionError(BaseModel):
+    policy_name: str
+    error: str
+
+
+class PolicyExtractionResponse(BaseModel):
+    source: str
+    policies: list[PolicyExtractionResult]
+    errors: list[PolicyExtractionError] = []

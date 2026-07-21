@@ -26,3 +26,14 @@ def dump_markdown(markdown: str, source: str, out_dir: str | Path) -> Path:
     path = out / f"{_safe_name(source)}.md"
     path.write_text(markdown, encoding="utf-8")
     return path
+
+
+def dump_policy_json(policy_json: str, source: str, policy_name: str, out_dir: str | Path) -> Path:
+    """Write an extracted policy's JSON to ``<out_dir>/<source>__<policy_name>.json``
+    and return the path. Both name parts are sanitized; re-extracting the same
+    source+policy overwrites its artifact."""
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{_safe_name(source)}__{_safe_name(policy_name)}.json"
+    path.write_text(policy_json, encoding="utf-8")
+    return path

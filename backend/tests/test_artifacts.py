@@ -31,3 +31,11 @@ def test_dump_markdown_overwrites_same_source(tmp_path):
     dump_markdown("first", "doc.txt", tmp_path)
     path = dump_markdown("second", "doc.txt", tmp_path)
     assert path.read_text(encoding="utf-8") == "second"
+
+
+def test_dump_policy_json_writes_named_file(tmp_path):
+    from app.artifacts import dump_policy_json
+
+    path = dump_policy_json('{"policy_name": "Career Move"}', "PPG.xlsx", "Career Move", tmp_path)
+    assert path == tmp_path / "PPG.xlsx__Career_Move.json"
+    assert path.read_text(encoding="utf-8") == '{"policy_name": "Career Move"}'
