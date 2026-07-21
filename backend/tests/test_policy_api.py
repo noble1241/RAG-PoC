@@ -99,3 +99,15 @@ async def test_extract_policy_unsupported_extension_415(client):
         files={"file": ("bad.exe", BytesIO(b"MZ"), "application/octet-stream")},
     )
     assert r.status_code == 415
+
+
+async def test_extract_policy_ingest_failure_recorded(client, monkeypatch, _redirect_output):
+    monkeypatch.setattr(policy_mod, "enumerate_policies", lambda md, **kw: ["Career Move"])
+    monkeypatch.setattr(policy_mod, "extract_policy_per_service", lambda md, **kw: _doc(kw["extra_instructions"]))
+    failing = AsyncMock(side_effect=RuntimeError("chroma down"))
+    monkeypatch.setattr(policy_mod, "ingest_policy", failing)
+
+    r = await client.post("/documents/extract-policy", files=_upload())
+    assert r.status_code == 422  # the only policy failed to ingest -> all failed
+    body = r.json()
+    assert body["detail"]  # error detail present
