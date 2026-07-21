@@ -26,9 +26,11 @@
 - **`backend/app/config.py`** (modify) — add `policy_extraction_model`, `policy_output_dir`.
 - **`backend/.env.example`** (modify) — document the two new settings.
 - **`backend/app/schemas.py`** (modify) — add `PolicyExtractionResult`, `PolicyExtractionError`, `PolicyExtractionResponse`.
-- **`backend/app/routes/policy.py`** (create) — the endpoint orchestrator.
+- **`backend/app/uploads.py`** (create) — shared `read_and_convert_upload()` helper (extension/size validation + MarkItDown conversion + best-effort markdown dump), consumed by both the upload and policy routes. Removes duplication between them.
+- **`backend/app/routes/documents.py`** (modify) — `ingest_file` refactored to call the shared helper.
+- **`backend/app/routes/policy.py`** (create) — the endpoint orchestrator (consumes the shared helper).
 - **`backend/app/main.py`** (modify) — register the new router.
-- **Tests (create):** `tests/test_policy_extraction.py`, `tests/test_policy_rag.py`, `tests/test_policy_api.py`; append to `tests/test_artifacts.py`.
+- **Tests (create):** `tests/test_policy_extraction.py`, `tests/test_policy_rag.py`, `tests/test_uploads.py`, `tests/test_policy_api.py`; append to `tests/test_artifacts.py`.
 - **Docs (modify):** `ARCHITECTURE.md`, `README.md`.
 
 ---
@@ -377,7 +379,257 @@ git commit -m "feat: policy JSON artifact writer, config, response schemas"
 
 ---
 
-### Task 4: The `/documents/extract-policy` endpoint
+### Task 4: Extract the shared upload helper (`read_and_convert_upload`)
+
+Removes the ~35-line validation/conversion preamble duplicated between the upload
+route and the new policy route by hoisting it into one helper both consume. The
+regression gate is the **existing** upload tests in `tests/test_api.py` — they exercise
+the moved code end-to-end and must stay green with no edits.
+
+**Files:**
+- Create: `backend/app/uploads.py`
+- Modify: `backend/app/routes/documents.py` (refactor `ingest_file`; drop the now-shared preamble + dead imports)
+- Test: `backend/tests/test_uploads.py`
+
+**Interfaces:**
+- Consumes: `get_converter`, `SUPPORTED_EXTENSIONS` (`app/conversion.py`); `dump_markdown` (`app/artifacts.py`); `settings`.
+- Produces:
+  - `BACKEND_DIR: Path` and `resolve_backend_dir(name: str) -> Path`
+  - `MAX_UPLOAD_BYTES: int` (10 MB)
+  - `async read_and_convert_upload(file: UploadFile) -> tuple[str, str, str, str | None]` returning `(filename, ext, markdown, converted_rel)`; raises `HTTPException` 415/413/422.
+
+- [ ] **Step 1: Write the failing unit tests**
+
+Create `backend/tests/test_uploads.py`:
+
+```python
+"""Unit tests for the shared upload validate+convert helper."""
+from __future__ import annotations
+
+from io import BytesIO
+
+import pytest
+from fastapi import HTTPException, UploadFile
+
+from app.uploads import read_and_convert_upload
+
+
+async def test_read_and_convert_returns_markdown_tuple(tmp_path, monkeypatch):
+    import app.uploads as up
+
+    monkeypatch.setattr(up.settings, "converted_output_dir", str(tmp_path))
+    f = UploadFile(file=BytesIO(b"name,role\nAlice,eng\n"), filename="people.csv")
+    filename, ext, markdown, converted_rel = await read_and_convert_upload(f)
+    assert filename == "people.csv"
+    assert ext == "csv"
+    assert "Alice" in markdown
+
+
+async def test_read_and_convert_rejects_unsupported_extension():
+    f = UploadFile(file=BytesIO(b"MZ"), filename="bad.exe")
+    with pytest.raises(HTTPException) as exc:
+        await read_and_convert_upload(f)
+    assert exc.value.status_code == 415
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run (from `backend/`): `"C:/Users/noble/miniconda3/envs/RAG-env/python.exe" -m pytest tests/test_uploads.py -q`
+Expected: FAIL — `ModuleNotFoundError: No module named 'app.uploads'`.
+
+- [ ] **Step 3: Create the shared helper**
+
+Create `backend/app/uploads.py`:
+
+```python
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+
+from fastapi import HTTPException, UploadFile, status
+
+from app.artifacts import dump_markdown
+from app.config import settings
+from app.conversion import SUPPORTED_EXTENSIONS, get_converter
+
+logger = logging.getLogger(__name__)
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+# app/ -> backend/ ; resolves a relative output dir regardless of process CWD.
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+def resolve_backend_dir(name: str) -> Path:
+    """Resolve a possibly-relative directory name against backend/."""
+    d = Path(name)
+    return d if d.is_absolute() else BACKEND_DIR / d
+
+
+async def read_and_convert_upload(file: UploadFile) -> tuple[str, str, str, str | None]:
+    """Validate, read, and convert an uploaded file to Markdown.
+
+    Returns ``(filename, ext, markdown, converted_rel)`` where ``converted_rel`` is the
+    backend-relative path of the best-effort Markdown dump (or ``None`` if the dump is
+    disabled or failed). Raises ``HTTPException`` 415 (unsupported extension), 413 (over
+    10 MB), or 422 (conversion error/timeout). Shared by the upload and policy routes.
+    """
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Unsupported file type. Supported: " + ", ".join(sorted(SUPPORTED_EXTENSIONS)),
+        )
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File too large (max 10 MB)"
+        )
+
+    try:
+        markdown = await get_converter().to_markdown(data, filename)
+    except asyncio.TimeoutError:
+        logger.warning("Conversion timed out for %s", filename)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="File conversion timed out"
+        )
+    except Exception as exc:
+        logger.exception("Failed to convert file %s", filename)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Could not parse file: {exc}"
+        )
+
+    converted_rel: str | None = None
+    if settings.save_converted_markdown:
+        try:
+            saved = dump_markdown(markdown, filename, resolve_backend_dir(settings.converted_output_dir))
+            converted_rel = (
+                str(saved.relative_to(BACKEND_DIR)) if saved.is_relative_to(BACKEND_DIR) else str(saved)
+            )
+            logger.info("Saved converted markdown to %s", saved)
+        except Exception:
+            logger.exception("Failed to save converted markdown for %s", filename)
+
+    return filename, ext, markdown, converted_rel
+```
+
+- [ ] **Step 4: Run the new tests to verify they pass**
+
+Run: `"C:/Users/noble/miniconda3/envs/RAG-env/python.exe" -m pytest tests/test_uploads.py -q`
+Expected: PASS (2 passed).
+
+- [ ] **Step 5: Refactor `documents.py` to use the helper**
+
+In `backend/app/routes/documents.py`:
+
+(a) Replace the top-of-file imports block so the shared names come from `app.uploads`. The imports currently are:
+
+```python
+from __future__ import annotations
+
+import asyncio
+import datetime
+import hashlib
+import json
+import logging
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+
+from app.artifacts import dump_markdown
+from app.config import settings
+from app.conversion import SUPPORTED_EXTENSIONS, get_converter
+from app.llm import embed_texts
+from app.manifest import record_ingestion
+from app.schemas import IngestResponse, IngestTextRequest
+from app.structuring import structure_document
+from app.vectorstore import upsert_chunks
+```
+
+Replace them with (drops `asyncio`, `dump_markdown`, `SUPPORTED_EXTENSIONS`, `get_converter`, and the local `Path`/`_BACKEND_DIR` machinery in favor of the shared helper; keeps everything `_ingest_text` still needs):
+
+```python
+from __future__ import annotations
+
+import datetime
+import hashlib
+import json
+import logging
+from typing import Annotated
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
+
+from app.config import settings
+from app.llm import embed_texts
+from app.manifest import record_ingestion
+from app.schemas import IngestResponse, IngestTextRequest
+from app.structuring import structure_document
+from app.uploads import read_and_convert_upload, resolve_backend_dir
+from app.vectorstore import upsert_chunks
+```
+
+(b) Delete the module-level `MAX_UPLOAD_BYTES`, `_BACKEND_DIR`, and `_resolve_converted_dir()` definitions near the top of the file:
+
+```python
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# backend/ root — resolves a relative converted_output_dir predictably,
+# regardless of the process CWD. (routes/ -> app/ -> backend/)
+_BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+
+def _resolve_converted_dir() -> Path:
+    out_dir = Path(settings.converted_output_dir)
+    if not out_dir.is_absolute():
+        out_dir = _BACKEND_DIR / out_dir
+    return out_dir
+```
+
+(c) In `_ingest_text`, the manifest path currently uses `_resolve_converted_dir()`:
+
+```python
+            record_ingestion(
+                _resolve_converted_dir() / settings.manifest_filename,
+```
+
+Change it to the shared resolver:
+
+```python
+            record_ingestion(
+                resolve_backend_dir(settings.converted_output_dir) / settings.manifest_filename,
+```
+
+(d) Replace the entire body of `ingest_file` (everything from `filename = file.filename or "upload"` through the final `return await _ingest_text(...)`) with:
+
+```python
+    filename, ext, markdown, converted_rel = await read_and_convert_upload(file)
+    return await _ingest_text(
+        text=markdown, source=filename, file_type=ext, converted_markdown=converted_rel
+    )
+```
+
+- [ ] **Step 6: Run the existing upload tests + full suite to confirm no regression**
+
+Run: `"C:/Users/noble/miniconda3/envs/RAG-env/python.exe" -m pytest tests/test_api.py tests/test_uploads.py -q`
+Expected: PASS — all `test_api.py` upload tests (415/413/422, csv ok, markdown dump, table metadata, manifest) unchanged, plus the 2 new helper tests.
+
+Then the full suite: `"C:/Users/noble/miniconda3/envs/RAG-env/python.exe" -m pytest -q`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/uploads.py backend/app/routes/documents.py backend/tests/test_uploads.py
+git commit -m "refactor: extract shared read_and_convert_upload helper"
+```
+
+---
+
+### Task 5: The `/documents/extract-policy` endpoint
 
 **Files:**
 - Create: `backend/app/routes/policy.py`
@@ -385,7 +637,7 @@ git commit -m "feat: policy JSON artifact writer, config, response schemas"
 - Test: `backend/tests/test_policy_api.py`
 
 **Interfaces:**
-- Consumes: `enumerate_policies`, `extract_policy_per_service`, `scope_to_section` (Task 1); `ingest_policy` (existing, returns `{"source","chunk_count","item_count"}`); `dump_markdown`, `dump_policy_json` (Task 3); `get_converter`, `SUPPORTED_EXTENSIONS`; `PolicyExtractionResult/Error/Response` (Task 3); `settings.policy_extraction_model`, `settings.policy_output_dir` (Task 3).
+- Consumes: `read_and_convert_upload`, `resolve_backend_dir`, `BACKEND_DIR` (Task 4); `enumerate_policies`, `extract_policy_per_service`, `scope_to_section` (Task 1); `ingest_policy` (existing, returns `{"source","chunk_count","item_count"}`); `dump_policy_json` (Task 3); `PolicyExtractionResult/Error/Response` (Task 3); `settings.policy_extraction_model`, `settings.policy_output_dir` (Task 3).
 - Produces: `POST /documents/extract-policy` returning `PolicyExtractionResponse`.
 
 - [ ] **Step 1: Write the failing route tests**
@@ -510,14 +762,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, status
 
-from app.artifacts import dump_markdown, dump_policy_json
+from app.artifacts import dump_policy_json
 from app.config import settings
-from app.conversion import SUPPORTED_EXTENSIONS, get_converter
 from app.policy_extraction import enumerate_policies, extract_policy_per_service, scope_to_section
 from app.policy_rag import ingest_policy
 from app.schemas import (
@@ -525,18 +775,10 @@ from app.schemas import (
     PolicyExtractionResponse,
     PolicyExtractionResult,
 )
+from app.uploads import BACKEND_DIR, read_and_convert_upload, resolve_backend_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
-# routes/ -> app/ -> backend/
-_BACKEND_DIR = Path(__file__).resolve().parents[2]
-
-
-def _resolve_dir(name: str) -> Path:
-    d = Path(name)
-    return d if d.is_absolute() else _BACKEND_DIR / d
 
 
 @router.post(
@@ -550,39 +792,9 @@ async def extract_policy_endpoint(
     sheet: str | None = Query(default=None, description="Restrict to the '## <sheet>' section"),
     policy: str | None = Query(default=None, description="Substring filter on enumerated policy names"),
 ) -> PolicyExtractionResponse:
-    filename = file.filename or "upload"
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in SUPPORTED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="Unsupported file type. Supported: " + ", ".join(sorted(SUPPORTED_EXTENSIONS)),
-        )
-
-    data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="File too large (max 10 MB)"
-        )
-
-    try:
-        markdown = await get_converter().to_markdown(data, filename)
-    except asyncio.TimeoutError:
-        logger.warning("Conversion timed out for %s", filename)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="File conversion timed out"
-        )
-    except Exception as exc:
-        logger.exception("Failed to convert file %s", filename)
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Could not parse file: {exc}"
-        )
-
-    # Best-effort raw-markdown dump for inspection (never breaks the request).
-    if settings.save_converted_markdown:
-        try:
-            dump_markdown(markdown, filename, _resolve_dir(settings.converted_output_dir))
-        except Exception:
-            logger.exception("Failed to save converted markdown for %s", filename)
+    # Shared with the upload route: validates extension/size, converts to Markdown
+    # (415/413/422 on bad input), and best-effort dumps the raw Markdown.
+    filename, _ext, markdown, _converted_rel = await read_and_convert_upload(file)
 
     scoped = scope_to_section(markdown, sheet) if sheet else markdown
     model = settings.policy_extraction_model or settings.chat_model
@@ -604,7 +816,7 @@ async def extract_policy_endpoint(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="No policy content detected"
         )
 
-    out_dir = _resolve_dir(settings.policy_output_dir)
+    out_dir = resolve_backend_dir(settings.policy_output_dir)
     results: list[PolicyExtractionResult] = []
     errors: list[PolicyExtractionError] = []
 
@@ -629,8 +841,8 @@ async def extract_policy_endpoint(
         try:
             saved = dump_policy_json(doc.model_dump_json(indent=2), filename, name, out_dir)
             json_path = (
-                str(saved.relative_to(_BACKEND_DIR))
-                if saved.is_relative_to(_BACKEND_DIR)
+                str(saved.relative_to(BACKEND_DIR))
+                if saved.is_relative_to(BACKEND_DIR)
                 else str(saved)
             )
         except Exception:
@@ -689,7 +901,7 @@ git commit -m "feat: POST /documents/extract-policy endpoint"
 
 ---
 
-### Task 5: Documentation
+### Task 6: Documentation
 
 **Files:**
 - Modify: `ARCHITECTURE.md`
@@ -740,6 +952,9 @@ upload → MarkItDown (reused) → [optional ?sheet= slice] → enumerate_polici
   `"<filename> [<policy name>]"`, so multiple policies from one workbook get disjoint
   deterministic IDs and separate manifest entries.
 - **`artifacts.py`** — `dump_policy_json()` writes the per-policy JSON artifact.
+- **`uploads.py`** — `read_and_convert_upload()` is the shared validate+convert+dump
+  helper used by BOTH the upload route and this policy route (extracted to remove the
+  duplicated preamble); `resolve_backend_dir()` / `BACKEND_DIR` resolve output dirs.
 
 Config: `POLICY_EXTRACTION_MODEL` (defaults to `CHAT_MODEL`; gpt-4o recommended) and
 `POLICY_OUTPUT_DIR` (default `policies`). Errors: 415/413/422 mirror the upload route;
@@ -758,4 +973,4 @@ git commit -m "docs: document the policy-extraction endpoint"
 - [ ] **Step 4: Final full-suite run**
 
 Run: `"C:/Users/noble/miniconda3/envs/RAG-env/python.exe" -m pytest -q`
-Expected: PASS — the existing suite (52) plus the 16 new tests (Task 1: 5, Task 2: 4, Task 3: 1, Task 4: 6) = 68 passing.
+Expected: PASS — the existing suite (52) plus the 18 new tests (Task 1: 5, Task 2: 4, Task 3: 1, Task 4: 2, Task 5: 6) = 70 passing.
