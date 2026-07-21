@@ -24,6 +24,21 @@ Notes / known first-pass limits (see the module docstring in review):
 - In OpenAI strict structured-output mode every field is always emitted, so
   optional lists come back as [] rather than being omitted (the reference file
   omits them). Semantically equivalent, slightly more verbose.
+
+HARDCODED / not-yet-parameterized — the main blocker to running this on other
+files. Two things are currently document-specific and supplied by the CALLER,
+not the module, so this does NOT yet work on an arbitrary xlsx as-is:
+  1. The focus instruction. The caller passes a document-specific `extra_instructions`
+     string naming WHICH sheet layout and WHICH policy column to extract — e.g.
+     "extract ONLY the 'Career Move' column, ignore the Company-Request columns;
+     the '#' column is the item_number/category_code". Point it at a different
+     workbook and that string is wrong.
+  2. The target sheet/section is sliced out of the workbook BY HAND before calling
+     (here: the 'IBT & IAM' sheet, then the Career-Move section).
+To make this reusable these must become real parameters (sheet name + column
+selector, or auto-detection). Separately, the Pydantic schema and system prompt
+are fixed to relocation PPGs — fine for this document type, but a different
+document type needs its own schema/prompt.
 """
 from __future__ import annotations
 
